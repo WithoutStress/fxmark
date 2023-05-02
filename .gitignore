@@ -11,5 +11,6 @@ bin/cpupol.py
 bin/*.o
 bin/fxmark
 bin/root
+bin/base
 bin/.tmp
 logs/
