@@ -41,7 +41,7 @@ class Runner(object):
         self.CORE_GRAIN    = core_grain
         self.PERFMON_LEVEL = pfm_lvl
         self.FILTER        = run_filter # media, fs, bench, ncore, directio
-        self.DRYRUN        = True
+        self.DRYRUN        = False 
         self.DEBUG_OUT     = False
 
         # bench config
@@ -49,12 +49,12 @@ class Runner(object):
         self.DURATION      = 30 # seconds
         self.DIRECTIOS     = ["bufferedio", "directio"]  # enable directio except tmpfs -> nodirectio 
         self.MEDIA_TYPES   = ["ssd", "hdd", "nvme", "mem"]
-#        self.FS_TYPES      = [
         self.FS_TYPES      = ["tmpfs",
                               "ext4", "ext4_no_jnl",
                               "xfs",
                               "btrfs", "f2fs",
                               # "jfs", "reiserfs", "ext2", "ext3",
+			      "stackfs", "rpcfs",
         ]
         self.BENCH_TYPES   = [
             # write/write
@@ -100,6 +100,7 @@ class Runner(object):
 
         # path config
         self.ROOT_NAME      = "root"
+        self.BASE_NAME      = "base"
         self.LOGD_NAME      = "../logs"
         self.FXMARK_NAME    = "fxmark"
         self.FILEBENCH_NAME = "run-filebench.py"
@@ -118,6 +119,8 @@ class Runner(object):
             "f2fs":self.mount_anyfs,
             "jfs":self.mount_anyfs,
             "reiserfs":self.mount_anyfs,
+	    "stackfs":self.mount_stackfs,
+	    "rpcfs":self.mount_rpcfs,
         }
         self.HOWTO_MKFS = {
             "ext2":"-F",
@@ -128,6 +131,7 @@ class Runner(object):
             "btrfs":"-f",
             "jfs":"-q",
             "reiserfs":"-q",
+	    "stackfs":"-F -E lazy_itable_init=0,lazy_journal_init=0",
         }
 
         # media config
@@ -202,6 +206,7 @@ class Runner(object):
         self.log_fd.write((log+'\n').encode('utf-8'))
         print(log)
 
+	# Init list of the number of cpu which will be used in bench not to exceed the number of logical cores  
     def get_ncores(self):
         hw_thr_cnts_map = {
             Runner.CORE_FINE_GRAIN:cpupol.test_hw_thr_cnts_fine_grain,
@@ -217,6 +222,7 @@ class Runner(object):
         return ncores
 
     def exec_cmd(self, cmd, out=None):
+        print(cmd)
         p = subprocess.Popen(cmd, shell=True, stdout=out, stderr=out)
         p.wait()
         return p
@@ -319,6 +325,68 @@ class Runner(object):
                           + self.DISK_SIZE + " none " + mnt_path,
                           self.dev_null)
         return p.returncode == 0
+
+    def mount_stackfs(self, media, fs, mnt_path):
+        (rc, dev_path) = self.init_media(media)
+        if not rc:
+            return False
+
+	# mount base local file system 
+        base_path = os.path.normpath(
+            os.path.join(CUR_DIR, self.BASE_NAME))
+
+        self.umount(base_path)
+        self.exec_cmd("mkdir -p " + base_path, self.dev_null)
+        p = self.exec_cmd("sudo mkfs.ext4" 
+                          + " " + self.HOWTO_MKFS.get(fs, "")
+                          + " " + dev_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd(' '.join(["sudo mount -t ext4",
+                                    dev_path, base_path]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + base_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+
+	# mount stackfs     
+        stackfs_bin = "/home/csl/hyungjoon/orig/filesystems/stackfs/StackFS_ll"
+        p = self.exec_cmd(' '.join(["sudo", stackfs_bin, "-r", 
+                                    base_path, mnt_path, "&"]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + mnt_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        return True
+
+    def mount_rpcfs(self, media, fs, mnt_path):
+        (rc, dev_path) = self.init_media(media)
+        if not rc:
+            return False
+
+        server_base_path = os.path.normpath(
+            os.path.join(CUR_DIR, self.BASE_NAME))
+
+	# TODO: prepare server process in remote server
+	# mount rpcfs     
+        rpcfs_bin = "/home/csl/share/fuse/rpcfs/bin/client"
+        p = self.exec_cmd(' '.join(["sudo", rpcfs_bin, "-r", 
+                                    server_base_path, mnt_path, "&"]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + mnt_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        return True
 
     def mount_anyfs(self, media, fs, mnt_path):
         (rc, dev_path) = self.init_media(media)
@@ -518,11 +586,11 @@ if __name__ == "__main__":
         #(Runner.CORE_FINE_GRAIN,
         # PerfMon.LEVEL_LOW,
         # ("mem", "*", "DWOL", "80", "directio")),
-		# ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
+	# ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
 
-        #(Runner.CORE_COARSE_GRAIN,
-        # PerfMon.LEVEL_PERF_RECORD,
-        # ("ssd", "*", "MWCL", "40", "bufferedio")),
+        (Runner.CORE_COARSE_GRAIN,
+         PerfMon.LEVEL_PERF_RECORD,
+         ("nvme", "stackfs", "MWCL", "*", "bufferedio")),
 
         # (Runner.CORE_COARSE_GRAIN,
         #  PerfMon.LEVEL_PERF_RECORD,
