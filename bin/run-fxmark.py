@@ -25,7 +25,7 @@ def catch_ctrl_C(sig, frame):
 class Runner(object):
     # media path
     LOOPDEV = "/dev/loopX"
-    NVMEDEV = "/dev/nvmeXn1pX"
+    NVMEDEV = "/dev/nvme1n1"
     HDDDEV  = "/dev/sdX"
     SSDDEV  = "/dev/sdY"
 
@@ -54,7 +54,7 @@ class Runner(object):
                               "xfs",
                               "btrfs", "f2fs",
                               # "jfs", "reiserfs", "ext2", "ext3",
-			      "stackfs", "rpcfs",
+							  "passthrough_ll", "stackfs", "rpcfs",
         ]
         self.BENCH_TYPES   = [
             # write/write
@@ -119,8 +119,9 @@ class Runner(object):
             "f2fs":self.mount_anyfs,
             "jfs":self.mount_anyfs,
             "reiserfs":self.mount_anyfs,
-	    "stackfs":self.mount_stackfs,
-	    "rpcfs":self.mount_rpcfs,
+			"passthrough_ll":self.mount_passthrough_ll,
+			"stackfs":self.mount_stackfs,
+			"rpcfs":self.mount_rpcfs,
         }
         self.HOWTO_MKFS = {
             "ext2":"-F",
@@ -131,7 +132,8 @@ class Runner(object):
             "btrfs":"-f",
             "jfs":"-q",
             "reiserfs":"-q",
-	    "stackfs":"-F -E lazy_itable_init=0,lazy_journal_init=0",
+			"passthrough_ll":"-F -E lazy_itable_init=0,lazy_journal_init=0",
+			"stackfs":"-F -E lazy_itable_init=0,lazy_journal_init=0",
         }
 
         # media config
@@ -262,7 +264,7 @@ class Runner(object):
                       self.dev_null)
         self.drop_caches()
         self.exec_cmd("sync", self.dev_null)
-        self.set_cpus(ncore)
+        # self.set_cpus(ncore)
 
     def pre_work(self):
         self.keep_sudo()
@@ -326,12 +328,12 @@ class Runner(object):
                           self.dev_null)
         return p.returncode == 0
 
-    def mount_stackfs(self, media, fs, mnt_path):
+    def mount_passthrough_ll(self, media, fs, mnt_path):
         (rc, dev_path) = self.init_media(media)
         if not rc:
             return False
 
-	# mount base local file system 
+		# mount base local file system 
         base_path = os.path.normpath(
             os.path.join(CUR_DIR, self.BASE_NAME))
 
@@ -353,8 +355,50 @@ class Runner(object):
         if p.returncode != 0:
             return False
 
-	# mount stackfs     
-        stackfs_bin = "/home/csl/hyungjoon/orig/filesystems/stackfs/StackFS_ll"
+		# mount passthrough_ll     
+        # passthrough_bin = "/home/csl/orig/filesystems/passthrough_ll/passthrough_ll"
+        passthrough_bin = "/home/csl/rfuse/filesystems/passthrough_ll/passthrough_ll"
+        p = self.exec_cmd(' '.join(["sudo", passthrough_bin, "-o source=" + base_path, mnt_path]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+		
+        p = self.exec_cmd("sudo chmod 777 " + mnt_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        return True
+
+    def mount_stackfs(self, media, fs, mnt_path):
+        (rc, dev_path) = self.init_media(media)
+        if not rc:
+            return False
+
+		# mount base local file system 
+        base_path = os.path.normpath(
+            os.path.join(CUR_DIR, self.BASE_NAME))
+
+        self.umount(base_path)
+        self.exec_cmd("mkdir -p " + base_path, self.dev_null)
+        p = self.exec_cmd("sudo mkfs.ext4" 
+                          + " " + self.HOWTO_MKFS.get(fs, "")
+                          + " " + dev_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd(' '.join(["sudo mount -t ext4",
+                                    dev_path, base_path]),
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+        p = self.exec_cmd("sudo chmod 777 " + base_path,
+                          self.dev_null)
+        if p.returncode != 0:
+            return False
+
+		# mount stackfs     
+        # stackfs_bin = "/home/csl/orig/filesystems/stackfs/StackFS_ll"
+        stackfs_bin = "/home/csl/rfuse/filesystems/stackfs/StackFS_ll"
         p = self.exec_cmd(' '.join(["sudo", stackfs_bin, "-r", 
                                     base_path, mnt_path, "&"]),
                           self.dev_null)
@@ -538,13 +582,13 @@ class Runner(object):
                 self.pre_work()
                 self.fxmark(media, fs, bench, ncore, nfg, nbg, dio)
                 self.post_work()
-            self.log("### NUM_TEST_CONF  = %d" % (cnt + 1))
+                self.log("### NUM_TEST_CONF  = %d" % (cnt + 1))
         finally:
             signal.signal(signal.SIGINT, catch_ctrl_C)
             self.log_end()
             self.fxmark_cleanup()
             self.umount(self.test_root)
-            self.set_cpus(0)
+            # self.set_cpus(0)
 
 def confirm_media_path():
     print("%" * 80)
@@ -585,12 +629,24 @@ if __name__ == "__main__":
     run_config = [
         #(Runner.CORE_FINE_GRAIN,
         # PerfMon.LEVEL_LOW,
-        # ("mem", "*", "DWOL", "80", "directio")),
-	# ("mem", "tmpfs", "filebench_varmail", "32", "directio")),
+        # ("mem", "*", "
+        # ("nvme", "passthrough_ll", "MWCL", "40", "bufferedio")),
 
-        (Runner.CORE_COARSE_GRAIN,
-         PerfMon.LEVEL_PERF_RECORD,
-         ("nvme", "stackfs", "MWCL", "*", "bufferedio")),
+        #(Runner.CORE_FINE_GRAIN,
+        #PerfMon.LEVEL_LOW,
+        #("nvme", "stackfs", "MWCL", "*", "bufferedio")),
+
+        (Runner.CORE_FINE_GRAIN,
+        PerfMon.LEVEL_LOW,
+        ("nvme", "stackfs", "MWUL", "*", "bufferedio")),
+        
+		#(Runner.CORE_COARSE_GRAIN,
+        #PerfMon.LEVEL_PERF_RECORD,
+        #("nvme", "stackfs", "MWUL", "*", "bufferedio")),
+
+        #(Runner.CORE_COARSE_GRAIN,
+         #PerfMon.LEVEL_PERF_RECORD,
+         #("nvme", "stackfs", "MWUM", "*", "bufferedio")),
 
         # (Runner.CORE_COARSE_GRAIN,
         #  PerfMon.LEVEL_PERF_RECORD,
